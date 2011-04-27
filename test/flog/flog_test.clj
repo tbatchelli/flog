@@ -1,7 +1,9 @@
-(ns flog-test
+(ns flog.flog-test
   (:use flog :reload)
-  (:use clojure.test)
-  (:import (org.slf4j MDC)))
+  (:use clojure.test
+        [clojure.contrib.str-utils2 :only (chomp)])
+  (:require [clojure.java.io :as io])
+  (:import (org.slf4j MDC LoggerFactory Logger)))
 
 (defn clear-context []
   (MDC/clear))
@@ -78,3 +80,27 @@
   (clear-context)
   (with-context []
     (test-clear-context)))
+
+(deftest test-sifter
+  (let [log-1 "log/1.log"
+        log-2 "log/2.log"
+        log-not-set "log/not-set.log"
+        msg-1 "This is a log entry for key 1"
+        msg-2 "This is a log entry for key 2"
+        msg-not-set "This is a log entry without a key"]
+    (doseq [log [log-1 log-2 log-not-set]]
+      (try
+        (io/delete-file log)
+        (catch Throwable e)))
+    (let [log (LoggerFactory/getLogger "test")]
+      (.debug log msg-not-set)
+      (with-context [:my-key 1]
+        (.debug log msg-1))
+      (with-context [:my-key 2]
+        (.debug log msg-2))
+      (let [file-1 (chomp (slurp log-1))]
+        (is (= file-1 msg-1)))
+      (let [file-2 (chomp (slurp log-2))]
+        (is (= file-2 msg-2)))
+      (let [file-not-set (chomp (slurp log-not-set))]
+        (is (= file-not-set msg-not-set)))))) 
