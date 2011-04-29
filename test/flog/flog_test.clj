@@ -1,7 +1,8 @@
 (ns flog.flog-test
   (:use flog :reload)
   (:use clojure.test
-        [clojure.contrib.str-utils2 :only (chomp)])
+        [clojure.contrib.str-utils2 :only (chomp split-lines)]
+        [clojure.tools.logging :only (debug warn)])
   (:require [clojure.java.io :as io])
   (:import (org.slf4j MDC LoggerFactory Logger)))
 
@@ -81,26 +82,73 @@
   (with-context []
     (test-clear-context)))
 
+(defn count-lines [file]
+  (try (count (split-lines (slurp file)))
+       (catch Throwable e
+         0)))
+
+(defn last-line [file]
+  (try (last (split-lines (slurp file)))
+       (catch Throwable e
+         nil)))
+
+(def log-1 "log/1.log")
+(def log-2 "log/2.log")
+(def log-not-set "log/not-set.log")
+
+(defn prime-logs [log]
+  "This is needed for when running the tests from the command line. The log files are
+resetted the first time you log a message, so if you count the lines before producing
+any log entry the result will be the number of lines of before resetting the file, not 0"
+  (let [msg "priming..."]
+    (.debug log msg)
+    (with-context [:my-key 1]
+      (.debug log msg))
+    (with-context [:my-key 2]
+      (.debug log msg))))
+
+(def prime-logs-fixture
+  (fn [f]
+    (let [log (LoggerFactory/getLogger "test")]
+      (prime-logs log)
+      (f))))
+
+(use-fixtures :once prime-logs-fixture)
+
 (deftest test-sifter
-  (let [log-1 "log/1.log"
-        log-2 "log/2.log"
-        log-not-set "log/not-set.log"
+  (let [log (LoggerFactory/getLogger "test")
+        lines-in-1 (count-lines log-1)
+        lines-in-2 (count-lines log-2)
+        lines-in-not-set (count-lines log-not-set)
         msg-1 "This is a log entry for key 1"
         msg-2 "This is a log entry for key 2"
         msg-not-set "This is a log entry without a key"]
-    (doseq [log [log-1 log-2 log-not-set]]
-      (try
-        (io/delete-file log)
-        (catch Throwable e)))
-    (let [log (LoggerFactory/getLogger "test")]
-      (.debug log msg-not-set)
-      (with-context [:my-key 1]
-        (.debug log msg-1))
-      (with-context [:my-key 2]
-        (.debug log msg-2))
-      (let [file-1 (chomp (slurp log-1))]
-        (is (= file-1 msg-1)))
-      (let [file-2 (chomp (slurp log-2))]
-        (is (= file-2 msg-2)))
-      (let [file-not-set (chomp (slurp log-not-set))]
-        (is (= file-not-set msg-not-set)))))) 
+    (.debug log msg-not-set)
+    (with-context [:my-key 1]
+      (.debug log msg-1))
+    (with-context [:my-key 2]
+      (.debug log msg-2))
+    (testing "Only one line was added to log-1, the right one"
+      (is (= (last-line log-1) msg-1))
+      (is (= (inc lines-in-1) (count-lines log-1))))
+    (testing "Only one line was added to log-2, the right one"
+      (is (= (last-line log-2) msg-2))
+      (is (= (inc lines-in-2) (count-lines log-2))))
+    (testing "Only one line was added to log-not-set, the right one"
+      (is (= (last-line log-not-set) msg-not-set))
+      (is (= (inc lines-in-not-set) (count-lines log-not-set))))))
+
+
+(deftest test-clojure-tools-logging
+  (let [log-not-set-count (count-lines log-not-set)
+        log-1-count (count-lines log-1)
+        msg "this is my debug message from clojure.tools.logging"]
+    (warn msg)
+    (testing "clojure.tools.logging adds one log line"
+      (is (= (last-line log-not-set) msg))
+      (is (= (inc log-not-set-count) (count-lines log-not-set))))
+    (with-context [:my-key 1]
+      (debug msg)
+      (testing "clojure.tools.logging works with contexts"
+        (is (= (last-line log-1) msg))
+        (is (= (inc log-1-count) (count-lines log-1)))))))
